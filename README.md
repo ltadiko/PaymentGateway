@@ -515,3 +515,23 @@ Full documentation is in the [`docs/`](docs/) directory:
 
 *Built with ❤️ using Java 21, Spring Boot 4.0.3, and Hexagonal Architecture*
 
+## 🔒 Tenant Context Propagation
+
+The application currently uses a ThreadLocal-based `TenantContext` to propagate tenant information from the JWT authentication filter to the service layer. This ensures tenant isolation and secure multi-tenancy.
+
+**Current Implementation:**
+- `TenantContext` uses `ThreadLocal<String>`.
+- Set in `JwtAuthenticationFilter` after JWT validation.
+- Cleared in a `finally` block to prevent leakage across pooled threads.
+
+**Migration Plan:**
+- When upgrading to **Java 25+**, replace `ThreadLocal` with [`ScopedValue`](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/lang/ScopedValue.html) for safer, more readable context propagation.
+- `ScopedValue` automatically manages context scope and prevents leakage, especially in virtual thread environments.
+
+**Industry Standard:**
+- Use `ThreadLocal` for Java 21 and below, with proper cleanup.
+- Use `ScopedValue` for Java 25+ (recommended for new codebases).
+
+**References:**
+- [Java 25 ScopedValue API](https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/lang/ScopedValue.html)
+---

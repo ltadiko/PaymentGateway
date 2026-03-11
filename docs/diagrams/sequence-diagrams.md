@@ -4,6 +4,15 @@ All diagrams use [Mermaid](https://mermaid.js.org/) syntax and can be rendered i
 
 ---
 
+## Outbox Pattern Legend
+
+> **Outbox Pattern:**
+> - Domain event is written to the `outbox_events` table in the same DB transaction as the state change.
+> - `OutboxPoller` (background process) reads unpublished events and publishes to Kafka.
+> - Ensures atomicity: no event is lost between DB commit and Kafka publish.
+
+---
+
 ## 1. Payment Ingestion — Happy Path
 
 ```mermaid
@@ -14,6 +23,8 @@ sequenceDiagram
     participant R as PaymentController
     participant S as PaymentIngestionService
     participant DB as Database (H2)
+    participant O as OutboxPoller
+    participant OB as Outbox Table
     participant K as Kafka
 
     C->>+F: POST /api/v1/payments<br/>Authorization: Bearer JWT<br/>Idempotency-Key: uuid-abc
@@ -38,15 +49,20 @@ sequenceDiagram
     S->>DB: INSERT INTO payments (...)
     S->>DB: INSERT INTO idempotency_keys (...)
     S->>DB: INSERT INTO audit_trail (SUBMITTED)
+    S->>OB: INSERT INTO outbox_events (payment.submitted)
     DB-->>-S: COMMIT OK
-
-    S->>+K: Publish to "payment.submitted"<br/>key=paymentId
-    K-->>-S: ACK
 
     S-->>-R: PaymentStatusResponse(paymentId, SUBMITTED)
 
     R-->>-F: 202 Accepted
     F-->>-C: HTTP 202<br/>{ "paymentId": "pay-uuid-001", "status": "SUBMITTED" }
+
+    %% OutboxPoller runs in background
+    O->>OB: Poll for unpublished events
+    OB-->>O: payment.submitted event
+    O->>+K: Publish to "payment.submitted"<br/>key=paymentId
+    K-->>-O: ACK
+    O->>OB: Mark event as published
 ```
 
 ---
@@ -79,7 +95,7 @@ sequenceDiagram
     R-->>-F: 200 OK (not 201/202)
     F-->>-C: HTTP 200<br/>{ original response }
 
-    Note over C,DB: No new payment created.<br/>No Kafka event published.<br/>No duplicate charge.
+    Note over C,DB: No new payment created.<br/>No outbox event written.<br/>No Kafka event published.<br/>No duplicate charge.
 ```
 
 ---
@@ -89,48 +105,71 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
+    participant O as OutboxPoller
+    participant OB as Outbox Table
     participant K1 as Kafka: payment.submitted
     participant FC as FraudAssessment Consumer
     participant FA as Fraud API (Mock)
     participant DB as Database
+    participant OB2 as Outbox Table
+    participant O2 as OutboxPoller
     participant K2 as Kafka: payment.fraud-assessed
     participant BC as BankProcessing Consumer
     participant BK as Bank Simulator
+    participant OB3 as Outbox Table
+    participant O3 as OutboxPoller
     participant K3 as Kafka: payment.completed
+
+    %% OutboxPoller relays payment.submitted
+    O->>OB: Poll for unpublished events
+    OB-->>O: payment.submitted event
+    O->>+K1: Publish to payment.submitted
+    K1-->>-O: ACK
+    O->>OB: Mark event as published
 
     K1->>+FC: Consume event (paymentId, tenantId)
 
     FC->>+DB: Update status -> FRAUD_CHECK_IN_PROGRESS
     FC->>DB: INSERT audit_trail
-    DB-->>-FC: OK
+    FC->>OB2: INSERT INTO outbox_events (payment.fraud-assessed)
+    DB-->>-FC: COMMIT OK
 
     FC->>+FA: POST /api/fraud/assess
     FA-->>-FC: { approved: true, score: 15 }
 
     FC->>+DB: Update status -> FRAUD_APPROVED
     FC->>DB: INSERT audit_trail
-    DB-->>-FC: OK
+    FC->>OB2: INSERT INTO outbox_events (payment.fraud-assessed)
+    DB-->>-FC: COMMIT OK
 
-    FC->>+K2: Publish to payment.fraud-assessed
-    K2-->>-FC: ACK
-    deactivate FC
+    %% OutboxPoller relays payment.fraud-assessed
+    O2->>OB2: Poll for unpublished events
+    OB2-->>O2: payment.fraud-assessed event
+    O2->>+K2: Publish to payment.fraud-assessed
+    K2-->>-O2: ACK
+    O2->>OB2: Mark event as published
 
     K2->>+BC: Consume event (paymentId, tenantId)
 
     BC->>+DB: Update status -> PROCESSING_BY_BANK
     BC->>DB: INSERT audit_trail
-    DB-->>-BC: OK
+    BC->>OB3: INSERT INTO outbox_events (payment.completed)
+    DB-->>-BC: COMMIT OK
 
     BC->>+BK: Process payment (random 100-3000ms latency)
     BK-->>-BC: { success: true, bankRef: BNK-12345 }
 
     BC->>+DB: Update status -> COMPLETED
     BC->>DB: INSERT audit_trail
-    DB-->>-BC: OK
+    BC->>OB3: INSERT INTO outbox_events (payment.completed)
+    DB-->>-BC: COMMIT OK
 
-    BC->>+K3: Publish to payment.completed
-    K3-->>-BC: ACK
-    deactivate BC
+    %% OutboxPoller relays payment.completed
+    O3->>OB3: Poll for unpublished events
+    OB3-->>O3: payment.completed event
+    O3->>+K3: Publish to payment.completed
+    K3-->>-O3: ACK
+    O3->>OB3: Mark event as published
 ```
 
 ---
@@ -140,27 +179,42 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
+    participant O as OutboxPoller
+    participant OB as Outbox Table
     participant K1 as Kafka: payment.submitted
     participant FC as FraudAssessment Consumer
     participant FA as Fraud API (Mock)
     participant DB as Database
+    participant OB2 as Outbox Table
+    participant O2 as OutboxPoller
     participant K3 as Kafka: payment.completed
+
+    %% OutboxPoller relays payment.submitted
+    O->>OB: Poll for unpublished events
+    OB-->>O: payment.submitted event
+    O->>+K1: Publish to payment.submitted
+    K1-->>-O: ACK
+    O->>OB: Mark event as published
 
     K1->>+FC: Consume event (paymentId, tenantId)
 
     FC->>+DB: Update status -> FRAUD_CHECK_IN_PROGRESS
-    DB-->>-FC: OK
+    FC->>OB2: INSERT INTO outbox_events (payment.completed)
+    DB-->>-FC: COMMIT OK
 
     FC->>+FA: POST /api/fraud/assess
     FA-->>-FC: { approved: false, reason: High risk }
 
     FC->>+DB: Update status -> FRAUD_REJECTED
-    FC->>DB: INSERT audit_trail (FRAUD_REJECTED)
-    DB-->>-FC: OK
+    FC->>OB2: INSERT INTO outbox_events (payment.completed)
+    DB-->>-FC: COMMIT OK
 
-    FC->>+K3: Publish to payment.completed (FAILED)
-    K3-->>-FC: ACK
-    deactivate FC
+    %% OutboxPoller relays payment.completed
+    O2->>OB2: Poll for unpublished events
+    OB2-->>O2: payment.completed event
+    O2->>+K3: Publish to payment.completed (FAILED)
+    K3-->>-O2: ACK
+    O2->>OB2: Mark event as published
 
     Note over K1,K3: Pipeline stops. No bank processing.
 ```
@@ -172,27 +226,41 @@ sequenceDiagram
 ```mermaid
 sequenceDiagram
     autonumber
+    participant O2 as OutboxPoller
+    participant OB2 as Outbox Table
     participant K2 as Kafka: payment.fraud-assessed
     participant BC as BankProcessing Consumer
     participant BK as Bank Simulator
-    participant DB as Database
+    participant OB3 as Outbox Table
+    participant O3 as OutboxPoller
     participant K3 as Kafka: payment.completed
+
+    %% OutboxPoller relays payment.fraud-assessed
+    O2->>OB2: Poll for unpublished events
+    OB2-->>O2: payment.fraud-assessed event
+    O2->>+K2: Publish to payment.fraud-assessed
+    K2-->>-O2: ACK
+    O2->>OB2: Mark event as published
 
     K2->>+BC: Consume event (paymentId)
 
     BC->>+DB: Update status -> PROCESSING_BY_BANK
-    DB-->>-BC: OK
+    BC->>OB3: INSERT INTO outbox_events (payment.completed)
+    DB-->>-BC: COMMIT OK
 
     BC->>+BK: Process payment
     BK-->>-BC: { success: false, reason: Insufficient funds }
 
     BC->>+DB: Update status -> FAILED
-    BC->>DB: INSERT audit_trail (FAILED)
-    DB-->>-BC: OK
+    BC->>OB3: INSERT INTO outbox_events (payment.completed)
+    DB-->>-BC: COMMIT OK
 
-    BC->>+K3: Publish to payment.completed (FAILED)
-    K3-->>-BC: ACK
-    deactivate BC
+    %% OutboxPoller relays payment.completed
+    O3->>OB3: Poll for unpublished events
+    OB3-->>O3: payment.completed event
+    O3->>+K3: Publish to payment.completed (FAILED)
+    K3-->>-O3: ACK
+    O3->>OB3: Mark event as published
 ```
 
 ---
@@ -205,6 +273,8 @@ sequenceDiagram
     participant K as Kafka: payment.submitted
     participant FC as FraudAssessment Consumer
     participant DB as Database
+    participant OB as Outbox Table
+    participant O as OutboxPoller
     participant DLT as Kafka: payment.submitted.DLT
 
     K->>+FC: Attempt 1
@@ -226,75 +296,17 @@ sequenceDiagram
     Note over K,FC: Backoff: 4s - FINAL attempt exhausted
 
     FC->>+DB: Update payment -> FAILED
-    FC->>DB: INSERT audit_trail
-    DB-->>-FC: OK
+    FC->>OB: INSERT INTO outbox_events (payment.submitted.DLT)
+    DB-->>-FC: COMMIT OK
 
-    FC->>+DLT: Publish to payment.submitted.DLT
-    DLT-->>-FC: ACK
+    %% OutboxPoller relays DLT event
+    O->>OB: Poll for unpublished events
+    OB-->>O: payment.submitted.DLT event
+    O->>+DLT: Publish to payment.submitted.DLT
+    DLT-->>-O: ACK
+    O->>OB: Mark event as published
 
     Note over K,DLT: Message preserved in DLT for manual replay
-```
-
----
-
-## 7. Status Inquiry — With Tenant Isolation
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client (Tenant A)
-    participant F as JwtAuthFilter
-    participant R as PaymentController
-    participant S as PaymentService
-    participant DB as Database
-
-    C->>+F: GET /api/v1/payments/pay-uuid-001<br/>Authorization: Bearer JWT (tenantId=tenant-A)
-
-    F->>F: Validate JWT, tenantId = tenant-A
-    F->>+R: Forward (authenticated)
-
-    R->>R: @PreAuthorize("hasRole('PAYMENT_VIEW')")
-    R->>+S: getPayment(paymentId, tenantId=tenant-A)
-
-    S->>+DB: SELECT FROM payments<br/>WHERE id=? AND tenant_id=tenant-A
-    DB-->>-S: Payment found
-
-    S->>S: Mask sensitive fields
-    S-->>-R: PaymentStatusResponse (masked)
-
-    R-->>-F: 200 OK
-    F-->>-C: { paymentId, status: COMPLETED, cardNumber: ****1234 }
-```
-
----
-
-## 8. Status Inquiry — Cross-Tenant Rejection
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant C as Client (Tenant B)
-    participant F as JwtAuthFilter
-    participant R as PaymentController
-    participant S as PaymentService
-    participant DB as Database
-
-    C->>+F: GET /api/v1/payments/pay-uuid-001<br/>Authorization: Bearer JWT (tenantId=tenant-B)
-
-    F->>F: Validate JWT, tenantId = tenant-B
-    F->>+R: Forward (authenticated)
-
-    R->>+S: getPayment(paymentId, tenantId=tenant-B)
-
-    S->>+DB: SELECT WHERE id=? AND tenant_id=tenant-B
-    DB-->>-S: NOT FOUND (belongs to tenant-A)
-
-    S-->>-R: throw PaymentNotFoundException
-
-    R-->>-F: 404 Not Found
-    F-->>-C: HTTP 404 { error: Payment not found }
-
-    Note over C,DB: Returns 404 not 403 to prevent<br/>information leakage about valid IDs
 ```
 
 ---
@@ -318,6 +330,11 @@ flowchart LR
 
     subgraph Data Layer
         E[(H2 Database)]
+        OB[(Outbox Table)]
+    end
+
+    subgraph Outbox
+        O[OutboxPoller]
     end
 
     subgraph Event Bus
@@ -339,17 +356,22 @@ flowchart LR
 
     A --> B --> C --> D
     D --> E
-    D --> F
+    D --> OB
+    O --> OB
+    OB --> F
     F --> J
     J --> L
     J --> E
-    J -->|approved| G
-    J -->|rejected| H
-    J -->|error after retries| I
+    J --> OB
+    O --> OB
+    OB --> G
     G --> K
     K --> M
     K --> E
-    K --> H
+    K --> OB
+    O --> OB
+    OB --> H
+    J -->|error after retries| I
     K -->|error after retries| I
 ```
 
