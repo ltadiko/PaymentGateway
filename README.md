@@ -160,6 +160,40 @@ docker-compose --profile app ps
 docker-compose --profile app down
 ```
 
+## Running the Application with Docker Compose
+
+Due to network issues connecting to Kafka from Maven, it is recommended to run the entire stack (Kafka and the Spring Boot app) using Docker Compose.
+
+### Steps
+
+1. **Build the Docker image:**
+   ```bash
+   docker-compose build
+   ```
+
+2. **Start Kafka and the Payment Gateway app:**
+   ```bash
+   docker-compose --profile app up -d
+   ```
+   This will start both Kafka and the Spring Boot application in containers.
+
+3. **Check health status:**
+   ```bash
+   docker-compose ps
+   # Or
+   curl http://localhost:8080/actuator/health
+   ```
+
+4. **Stop the stack:**
+   ```bash
+   docker-compose down
+   ```
+
+### Notes
+- The application will be available at [http://localhost:8080](http://localhost:8080).
+- Kafka will be available at `localhost:9092` for local testing.
+- All API endpoints, health checks, and test collections (Bruno/Postman) can be used as described below.
+
 ### Docker Compose Services
 
 | Service | Container | Port | Profile |
