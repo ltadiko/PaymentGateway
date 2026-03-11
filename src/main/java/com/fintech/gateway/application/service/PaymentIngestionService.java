@@ -88,7 +88,7 @@ public class PaymentIngestionService implements SubmitPaymentUseCase {
     @Override
     @Transactional
     public PaymentResponse submit(SubmitPaymentCommand command) {
-        // 1. Check for existing idempotency key
+        // 1. Check for existing idempotency key . can be used cache like redis
         Optional<String> existingResponse = idempotencyStore.findResponse(
                 command.tenantId(), command.idempotencyKey());
 

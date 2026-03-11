@@ -76,6 +76,8 @@ public class SecurityConfig {
                         .requestMatchers("/h2-console/**").permitAll()
                         // Mock fraud endpoint (internal, called by Kafka consumer)
                         .requestMatchers("/api/v1/fraud/**").permitAll()
+                        // Actuator health check
+                        .requestMatchers("/actuator/**").permitAll()
                         // Swagger UI & OpenAPI spec
                         .requestMatchers("/swagger-ui/**", "/swagger-ui.html",
                                 "/v3/api-docs/**", "/v3/api-docs").permitAll()

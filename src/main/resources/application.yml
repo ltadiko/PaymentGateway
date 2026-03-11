@@ -65,6 +65,16 @@ app:
     cleanup-interval-ms: 3600000
     retention-days: 7
 
+# ── Actuator ──
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
 # ── Logging ──
 logging:
   level:
