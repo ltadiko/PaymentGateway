@@ -1,0 +1,31 @@
+meta {
+  name: Get Token (Tenant B)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/token
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "subject": "other-merchant",
+    "tenantId": "tenant-002",
+    "roles": ["PAYMENT_SUBMIT", "PAYMENT_VIEW"]
+  }
+}
+
+docs {
+  # Get Token (Tenant B)
+
+  Issues a JWT token for a different tenant (tenant-002).
+  Use this to test tenant isolation — Tenant B cannot see Tenant A's payments.
+}
+

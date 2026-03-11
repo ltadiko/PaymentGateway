@@ -1,0 +1,42 @@
+meta {
+  name: Get JWT Token
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/token
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "subject": "merchant-abc",
+    "tenantId": "tenant-001",
+    "roles": ["PAYMENT_SUBMIT", "PAYMENT_VIEW"]
+  }
+}
+
+script:post-response {
+  if (res.status === 200) {
+    bru.setVar("token", res.body.token);
+  }
+}
+
+docs {
+  # Get JWT Token
+
+  Issues a mock JWT token for testing. In production, tokens would come from an external IdP (Keycloak/Auth0).
+
+  The token is automatically saved to the `token` variable for use in subsequent requests.
+
+  ## Roles
+  - `PAYMENT_SUBMIT` — Required to POST /payments
+  - `PAYMENT_VIEW` — Required to GET /payments/{id} and /payments/{id}/audit
+}
+

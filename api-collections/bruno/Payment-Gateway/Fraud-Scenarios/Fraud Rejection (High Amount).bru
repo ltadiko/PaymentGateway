@@ -1,0 +1,49 @@
+meta {
+  name: Fraud Rejection (High Amount)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/payments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "amount": 15000.00,
+    "currency": "USD",
+    "creditorAccount": "NL91ABNA0417164300",
+    "debtorAccount": "DE89370400440532013000",
+    "paymentMethod": "CARD"
+  }
+}
+
+script:post-response {
+  if (res.status === 202 || res.status === 200) {
+    bru.setVar("paymentId", res.body.paymentId);
+  }
+}
+
+docs {
+  # Fraud Rejection (High Amount)
+
+  Amount ≥ 10,000 triggers fraud rejection (score 85).
+
+  **Expected:** 202 Accepted → status becomes FRAUD_REJECTED
+
+  Pipeline stops after fraud check — no bank processing occurs.
+
+  Audit trail: SUBMITTED → FRAUD_CHECK_IN_PROGRESS → FRAUD_REJECTED
+}
+

@@ -1,0 +1,47 @@
+meta {
+  name: Bank Failure (Amount 99.99)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/payments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "amount": 99.99,
+    "currency": "USD",
+    "creditorAccount": "NL91ABNA0417164300",
+    "debtorAccount": "DE89370400440532013000",
+    "paymentMethod": "BANK_TRANSFER"
+  }
+}
+
+script:post-response {
+  if (res.status === 202 || res.status === 200) {
+    bru.setVar("paymentId", res.body.paymentId);
+  }
+}
+
+docs {
+  # Bank Failure (Deterministic)
+
+  Amount `99.99` triggers the deterministic bank failure test hook ("Insufficient funds").
+
+  **Expected:** 202 Accepted → fraud approved → bank fails → status becomes FAILED
+
+  Audit trail: SUBMITTED → FRAUD_CHECK_IN_PROGRESS → FRAUD_APPROVED → PROCESSING_BY_BANK → FAILED
+}
+

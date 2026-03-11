@@ -1,0 +1,45 @@
+meta {
+  name: Submit Payment (Random)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/payments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "amount": 250.00,
+    "currency": "EUR",
+    "creditorAccount": "NL91ABNA0417164300",
+    "debtorAccount": "DE89370400440532013000",
+    "paymentMethod": "CARD"
+  }
+}
+
+script:post-response {
+  if (res.status === 202 || res.status === 200) {
+    bru.setVar("paymentId", res.body.paymentId);
+  }
+}
+
+docs {
+  # Submit Payment (Random Outcome)
+
+  Normal amount — goes through fraud check (approved) then bank simulator (70% success, 30% failure).
+
+  **Expected:** 202 Accepted → status becomes COMPLETED or FAILED
+}
+

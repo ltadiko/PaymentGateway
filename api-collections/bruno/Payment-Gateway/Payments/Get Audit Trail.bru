@@ -1,0 +1,32 @@
+meta {
+  name: Get Audit Trail
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/api/v1/payments/{{paymentId}}/audit
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  # Get Audit Trail
+
+  Returns the complete immutable audit trail for a payment — every state transition from ingestion to final resolution.
+
+  **Happy path audit trail:**
+  ```json
+  [
+    {"newStatus": "SUBMITTED", ...},
+    {"newStatus": "FRAUD_CHECK_IN_PROGRESS", ...},
+    {"newStatus": "FRAUD_APPROVED", ...},
+    {"newStatus": "PROCESSING_BY_BANK", ...},
+    {"newStatus": "COMPLETED", ...}
+  ]
+  ```
+}
+

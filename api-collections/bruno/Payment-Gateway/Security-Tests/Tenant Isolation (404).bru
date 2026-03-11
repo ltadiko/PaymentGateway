@@ -1,0 +1,26 @@
+meta {
+  name: Tenant Isolation (404)
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/payments/{{paymentId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  # Tenant Isolation → 404
+
+  **Pre-requisites:**
+  1. Run "Get JWT Token" (tenant-001) and submit a payment to get a `paymentId`
+  2. Run "Get Token (Tenant B)" (tenant-002) to switch to a different tenant
+  3. Run this request — Tenant B cannot see Tenant A's payment
+
+  **Expected:** 404 Not Found (no information leakage about whether the payment exists)
+}
+

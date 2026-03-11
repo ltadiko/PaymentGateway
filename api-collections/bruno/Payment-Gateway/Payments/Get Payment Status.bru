@@ -1,0 +1,25 @@
+meta {
+  name: Get Payment Status
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/api/v1/payments/{{paymentId}}
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+docs {
+  # Get Payment Status
+
+  Queries the current status of a payment. Account numbers are masked in the response (`****4300`).
+
+  **Statuses:** SUBMITTED → FRAUD_CHECK_IN_PROGRESS → FRAUD_APPROVED → PROCESSING_BY_BANK → COMPLETED/FAILED
+
+  Run this after submitting a payment and waiting 3-5 seconds for async processing.
+}
+

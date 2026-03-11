@@ -1,0 +1,31 @@
+meta {
+  name: Get Token (View Only)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/auth/token
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "subject": "viewer",
+    "tenantId": "tenant-001",
+    "roles": ["PAYMENT_VIEW"]
+  }
+}
+
+docs {
+  # Get Token (View Only)
+
+  Issues a JWT token with only `PAYMENT_VIEW` role — cannot submit payments.
+  Use this to test 403 Forbidden on POST /payments.
+}
+

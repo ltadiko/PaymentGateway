@@ -1,0 +1,81 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: payment-gateway
+
+  # ── Virtual Threads (Java 21+) ──
+  threads:
+    virtual:
+      enabled: true
+
+  # ── H2 Database ──
+  datasource:
+    url: jdbc:h2:mem:paymentdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: true
+    database-platform: org.hibernate.dialect.H2Dialect
+
+  # ── Kafka ──
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        spring.json.add.type.headers: true
+    consumer:
+      group-id: payment-gateway
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.fintech.gateway.*
+        spring.json.use.type.headers: true
+      enable-auto-commit: false
+    listener:
+      ack-mode: record
+
+# ── Application Config ──
+app:
+  security:
+    jwt:
+      secret: ThisIsA256BitSecretKeyForHMACSHA256PaymentGateway2026SecureKey!!
+      expiration-ms: 3600000
+  encryption:
+    secret-key: AES256BitSecretKey!
+  fraud:
+    api:
+      base-url: http://localhost:${server.port}
+
+# ── Logging ──
+logging:
+  level:
+    com.fintech.gateway: DEBUG
+    org.springframework.kafka: WARN
+    org.apache.kafka: WARN
+
+# ── OpenAPI / Swagger UI ──
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+    try-it-out-enabled: true
+  default-produces-media-type: application/json
+

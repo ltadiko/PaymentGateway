@@ -1,0 +1,46 @@
+meta {
+  name: Borderline Fraud (Medium Amount)
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/payments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "amount": 7500.00,
+    "currency": "GBP",
+    "creditorAccount": "NL91ABNA0417164300",
+    "debtorAccount": "DE89370400440532013000",
+    "paymentMethod": "WALLET"
+  }
+}
+
+script:post-response {
+  if (res.status === 202 || res.status === 200) {
+    bru.setVar("paymentId", res.body.paymentId);
+  }
+}
+
+docs {
+  # Borderline Fraud (Medium Amount)
+
+  Amount 5,000-9,999 gets fraud score 55 (borderline) but is still approved.
+  Proceeds to bank processing with 70% success rate.
+
+  **Expected:** 202 Accepted → fraud approved (score 55) → COMPLETED or FAILED
+}
+

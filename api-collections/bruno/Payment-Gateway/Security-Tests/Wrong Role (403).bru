@@ -1,0 +1,41 @@
+meta {
+  name: Wrong Role (403)
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/payments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "amount": 10.00,
+    "currency": "USD",
+    "creditorAccount": "NL91ABNA0417164300",
+    "debtorAccount": "DE89370400440532013000",
+    "paymentMethod": "CARD"
+  }
+}
+
+docs {
+  # Wrong Role → 403 Forbidden
+
+  **Pre-requisite:** First run "Get Token (View Only)" to get a token with only `PAYMENT_VIEW`.
+
+  A token with `PAYMENT_VIEW` cannot POST to /payments (requires `PAYMENT_SUBMIT`).
+
+  **Expected:** 403 Forbidden
+}
+

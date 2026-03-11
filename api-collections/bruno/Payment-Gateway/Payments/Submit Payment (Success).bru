@@ -1,0 +1,49 @@
+meta {
+  name: Submit Payment (Success)
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/api/v1/payments
+  body: json
+  auth: bearer
+}
+
+auth:bearer {
+  token: {{token}}
+}
+
+headers {
+  Content-Type: application/json
+  Idempotency-Key: {{$guid}}
+}
+
+body:json {
+  {
+    "amount": 11.11,
+    "currency": "USD",
+    "creditorAccount": "NL91ABNA0417164300",
+    "debtorAccount": "DE89370400440532013000",
+    "paymentMethod": "BANK_TRANSFER"
+  }
+}
+
+script:post-response {
+  if (res.status === 202 || res.status === 200) {
+    bru.setVar("paymentId", res.body.paymentId);
+  }
+}
+
+docs {
+  # Submit Payment (Deterministic Success)
+
+  Amount `11.11` triggers the deterministic bank success test hook.
+
+  **Expected:** 202 Accepted → async pipeline → status becomes COMPLETED
+
+  The `paymentId` is saved to a variable for subsequent status/audit queries.
+
+  Wait 3-5 seconds, then run "Get Payment Status" to see COMPLETED.
+}
+

@@ -1,0 +1,19 @@
+meta {
+  name: No Token (401)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/payments/00000000-0000-0000-0000-000000000000
+  auth: none
+}
+
+docs {
+  # No Token → 401 Unauthorized
+
+  Request without JWT token is rejected with 401.
+
+  **Expected:** 401 Unauthorized
+}
+

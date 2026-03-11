@@ -1,0 +1,105 @@
+openapi: 3.1.0
+info:
+  title: Fraud Assessment Service API
+  version: 1.0.0
+  description: |
+    External microservice for payment fraud detection.
+    This API is called by the Payment Gateway during the fraud assessment phase.
+    In this assignment, the response is mocked by an in-app controller.
+
+servers:
+  - url: http://localhost:8080
+    description: Local mock server
+
+paths:
+  /api/v1/fraud/assess:
+    post:
+      operationId: assessPayment
+      summary: Assess a payment for fraud risk
+      description: |
+        Evaluates a payment transaction for potential fraud.
+        Returns a risk score (0-100) and an approval/rejection decision.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FraudAssessmentRequest'
+      responses:
+        '200':
+          description: Assessment completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FraudAssessmentResponse'
+        '400':
+          description: Invalid request payload
+        '500':
+          description: Assessment service unavailable
+
+components:
+  schemas:
+    FraudAssessmentRequest:
+      type: object
+      required:
+        - paymentId
+        - amount
+        - currency
+        - merchantId
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+          description: Unique payment identifier
+        amount:
+          type: number
+          format: decimal
+          description: Payment amount
+          example: 150.00
+        currency:
+          type: string
+          minLength: 3
+          maxLength: 3
+          description: ISO 4217 currency code
+          example: USD
+        merchantId:
+          type: string
+          description: Tenant/merchant identifier
+          example: tenant-001
+        paymentMethod:
+          type: string
+          enum:
+            - CARD
+            - BANK_TRANSFER
+            - WALLET
+          description: Payment method used
+
+    FraudAssessmentResponse:
+      type: object
+      required:
+        - paymentId
+        - approved
+        - fraudScore
+      properties:
+        paymentId:
+          type: string
+          format: uuid
+          description: Unique payment identifier
+        approved:
+          type: boolean
+          description: Whether the payment passed fraud checks
+        fraudScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Risk score — 0 = no risk, 100 = definite fraud
+          example: 15
+        reason:
+          type: string
+          description: Human-readable reason (present when rejected)
+          example: "High risk transaction amount"
+        assessedAt:
+          type: string
+          format: date-time
+          description: Timestamp of the assessment
+

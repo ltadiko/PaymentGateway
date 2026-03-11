@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Logback configuration with PII/PCI masking.
+
+  All log output is filtered through MaskingPatternLayout, which applies
+  regex-based masking to prevent sensitive data from appearing in logs:
+    - IBAN account numbers → ****XXXX (last 4)
+    - Card numbers (PAN)   → ****XXXX (last 4)
+    - JSON account fields  → masked values
+    - JWT tokens           → Bearer ****
+
+  This is a defence-in-depth measure on top of application-level masking.
+-->
+<configuration>
+
+    <!-- ── Console Appender with PII Masking ── -->
+    <appender name="MASKED_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <layout class="com.fintech.gateway.infrastructure.logging.MaskingPatternLayout">
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+        </layout>
+    </appender>
+
+    <!-- ── Application Loggers ── -->
+    <logger name="com.fintech.gateway" level="DEBUG" />
+
+    <!-- Quiet Kafka noise in logs -->
+    <logger name="org.springframework.kafka" level="WARN" />
+    <logger name="org.apache.kafka" level="WARN" />
+
+    <!-- ── Root Logger ── -->
+    <root level="INFO">
+        <appender-ref ref="MASKED_CONSOLE" />
+    </root>
+
+</configuration>
+

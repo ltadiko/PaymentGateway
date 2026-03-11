@@ -1,0 +1,593 @@
+{
+	"info": {
+		"_postman_id": "pg-collection-001",
+		"name": "Payment Gateway API",
+		"description": "Secure Event-Driven Payment Gateway — API Collection\n\n## Quick Start\n1. Run \"1. Auth → Get JWT Token\" first to populate the `token` variable\n2. Run \"2. Payments → Submit Payment (Success)\" to create a payment\n3. Wait 3-5 seconds for async pipeline processing\n4. Run \"3. Payments → Get Payment Status\" to see COMPLETED\n5. Run \"4. Payments → Get Audit Trail\" to see all state transitions\n\n## Test Hooks\n- Amount `11.11` → Bank always succeeds\n- Amount `99.99` → Bank always fails\n- Amount `≥ 10,000` → Fraud rejected\n\n## Architecture\nJava 21 • Spring Boot 4.0.3 • Kafka • H2 • Hexagonal Architecture",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+	},
+	"variable": [
+		{
+			"key": "baseUrl",
+			"value": "http://localhost:8080",
+			"type": "string"
+		},
+		{
+			"key": "token",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "paymentId",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "tokenTenantB",
+			"value": "",
+			"type": "string"
+		},
+		{
+			"key": "viewOnlyToken",
+			"value": "",
+			"type": "string"
+		}
+	],
+	"item": [
+		{
+			"name": "1. Auth",
+			"description": "JWT token issuance (mock — replaces Keycloak/Auth0 for this assignment)",
+			"item": [
+				{
+					"name": "Get JWT Token",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));",
+									"pm.test('Response has token', () => {",
+									"    const json = pm.response.json();",
+									"    pm.expect(json.token).to.be.a('string');",
+									"    pm.collectionVariables.set('token', json.token);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"subject\": \"merchant-abc\",\n  \"tenantId\": \"tenant-001\",\n  \"roles\": [\"PAYMENT_SUBMIT\", \"PAYMENT_VIEW\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/auth/token",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "auth", "token"]
+						},
+						"description": "Issues a mock JWT token with PAYMENT_SUBMIT + PAYMENT_VIEW roles for tenant-001.\n\nThe token is automatically saved to the `token` collection variable."
+					}
+				},
+				{
+					"name": "Get Token (View Only)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));",
+									"const json = pm.response.json();",
+									"pm.collectionVariables.set('viewOnlyToken', json.token);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"subject\": \"viewer\",\n  \"tenantId\": \"tenant-001\",\n  \"roles\": [\"PAYMENT_VIEW\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/auth/token",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "auth", "token"]
+						},
+						"description": "Issues a JWT with PAYMENT_VIEW only — cannot submit payments. Use to test 403 on POST."
+					}
+				},
+				{
+					"name": "Get Token (Tenant B)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));",
+									"const json = pm.response.json();",
+									"pm.collectionVariables.set('tokenTenantB', json.token);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"subject\": \"other-merchant\",\n  \"tenantId\": \"tenant-002\",\n  \"roles\": [\"PAYMENT_SUBMIT\", \"PAYMENT_VIEW\"]\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/auth/token",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "auth", "token"]
+						},
+						"description": "Issues a JWT for tenant-002. Use to test tenant isolation — this tenant cannot see tenant-001's payments."
+					}
+				}
+			]
+		},
+		{
+			"name": "2. Payments",
+			"description": "Core payment operations — submit, query status, audit trail",
+			"item": [
+				{
+					"name": "Submit Payment (Success — 11.11)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 202 Accepted', () => pm.response.to.have.status(202));",
+									"pm.test('Response has paymentId', () => {",
+									"    const json = pm.response.json();",
+									"    pm.expect(json.paymentId).to.be.a('string');",
+									"    pm.collectionVariables.set('paymentId', json.paymentId);",
+									"});",
+									"pm.test('Response has status SUBMITTED', () => {",
+									"    pm.expect(pm.response.json().status).to.eql('SUBMITTED');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{$guid}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 11.11,\n  \"currency\": \"USD\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"BANK_TRANSFER\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Amount 11.11 → deterministic bank success.\n\nExpected: 202 → pipeline → COMPLETED\n\nWait 3-5s then run 'Get Payment Status'."
+					}
+				},
+				{
+					"name": "Submit Payment (Random — 250.00)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 202', () => pm.response.to.have.status(202));",
+									"pm.collectionVariables.set('paymentId', pm.response.json().paymentId);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{$guid}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 250.00,\n  \"currency\": \"EUR\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"CARD\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Normal amount — 70% chance of bank success."
+					}
+				},
+				{
+					"name": "Get Payment Status",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));",
+									"pm.test('Has payment status', () => {",
+									"    const json = pm.response.json();",
+									"    pm.expect(json.status).to.be.a('string');",
+									"    pm.expect(json.paymentId).to.eql(pm.collectionVariables.get('paymentId'));",
+									"});",
+									"pm.test('Account numbers are masked', () => {",
+									"    const json = pm.response.json();",
+									"    pm.expect(json.creditorAccount).to.match(/^\\*\\*\\*\\*/);",
+									"    pm.expect(json.debtorAccount).to.match(/^\\*\\*\\*\\*/);",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments/{{paymentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments", "{{paymentId}}"]
+						},
+						"description": "Query payment status. Account numbers are masked (****4300)."
+					}
+				},
+				{
+					"name": "Get Audit Trail",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 200', () => pm.response.to.have.status(200));",
+									"pm.test('Audit trail is array', () => {",
+									"    pm.expect(pm.response.json()).to.be.an('array');",
+									"});",
+									"pm.test('First entry is SUBMITTED', () => {",
+									"    pm.expect(pm.response.json()[0].newStatus).to.eql('SUBMITTED');",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{token}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments/{{paymentId}}/audit",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments", "{{paymentId}}", "audit"]
+						},
+						"description": "Returns the immutable audit trail — every state transition."
+					}
+				}
+			]
+		},
+		{
+			"name": "3. Fraud & Bank Scenarios",
+			"description": "Test deterministic fraud rejection and bank failure outcomes",
+			"item": [
+				{
+					"name": "Fraud Rejection (Amount ≥ 10,000)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 202', () => pm.response.to.have.status(202));",
+									"pm.collectionVariables.set('paymentId', pm.response.json().paymentId);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{$guid}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 15000.00,\n  \"currency\": \"USD\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"CARD\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Amount ≥ 10,000 → fraud score 85 → FRAUD_REJECTED.\n\nWait 3s, then run 'Get Payment Status' — should be FRAUD_REJECTED."
+					}
+				},
+				{
+					"name": "Bank Failure (Amount 99.99)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 202', () => pm.response.to.have.status(202));",
+									"pm.collectionVariables.set('paymentId', pm.response.json().paymentId);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{$guid}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 99.99,\n  \"currency\": \"USD\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"BANK_TRANSFER\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Amount 99.99 → fraud approved → bank always fails → FAILED.\n\nWait 3s, then run 'Get Payment Status' — should be FAILED."
+					}
+				},
+				{
+					"name": "Borderline Fraud (Amount 7,500)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Status is 202', () => pm.response.to.have.status(202));",
+									"pm.collectionVariables.set('paymentId', pm.response.json().paymentId);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{$guid}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 7500.00,\n  \"currency\": \"GBP\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"WALLET\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Amount 5,000–9,999 → fraud score 55 (borderline approved) → bank 70% success."
+					}
+				}
+			]
+		},
+		{
+			"name": "4. Idempotency",
+			"description": "Verify strict idempotency — duplicate requests return the same result",
+			"item": [
+				{
+					"name": "Submit (First Call — 202)",
+					"event": [
+						{
+							"listen": "prerequest",
+							"script": {
+								"exec": [
+									"const idempKey = pm.variables.replaceIn('{{$guid}}');",
+									"pm.collectionVariables.set('idempotencyKey', idempKey);"
+								],
+								"type": "text/javascript"
+							}
+						},
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('First call returns 202', () => pm.response.to.have.status(202));",
+									"pm.collectionVariables.set('paymentId', pm.response.json().paymentId);"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 50.00,\n  \"currency\": \"USD\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"CARD\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "First submission — creates the payment. Saves idempotencyKey for reuse."
+					}
+				},
+				{
+					"name": "Submit (Duplicate — 200)",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Duplicate returns 200 (not 202)', () => pm.response.to.have.status(200));",
+									"pm.test('Same paymentId returned', () => {",
+									"    pm.expect(pm.response.json().paymentId).to.eql(pm.collectionVariables.get('paymentId'));",
+									"});"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{token}}" },
+							{ "key": "Idempotency-Key", "value": "{{idempotencyKey}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 50.00,\n  \"currency\": \"USD\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"CARD\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Duplicate submission with SAME idempotency key — returns 200 with the same paymentId."
+					}
+				}
+			]
+		},
+		{
+			"name": "5. Security Tests",
+			"description": "Verify authentication, authorization, and tenant isolation",
+			"item": [
+				{
+					"name": "No Token → 401",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Returns 401 Unauthorized', () => pm.response.to.have.status(401));"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments/00000000-0000-0000-0000-000000000000",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments", "00000000-0000-0000-0000-000000000000"]
+						},
+						"description": "Request without any JWT token."
+					}
+				},
+				{
+					"name": "Wrong Role → 403",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Returns 403 Forbidden', () => pm.response.to.have.status(403));"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "POST",
+						"header": [
+							{ "key": "Content-Type", "value": "application/json" },
+							{ "key": "Authorization", "value": "Bearer {{viewOnlyToken}}" },
+							{ "key": "Idempotency-Key", "value": "{{$guid}}" }
+						],
+						"body": {
+							"mode": "raw",
+							"raw": "{\n  \"amount\": 10.00,\n  \"currency\": \"USD\",\n  \"creditorAccount\": \"NL91ABNA0417164300\",\n  \"debtorAccount\": \"DE89370400440532013000\",\n  \"paymentMethod\": \"CARD\"\n}"
+						},
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments"]
+						},
+						"description": "Token with PAYMENT_VIEW cannot POST. Run 'Get Token (View Only)' first."
+					}
+				},
+				{
+					"name": "Tenant Isolation → 404",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Returns 404 Not Found', () => pm.response.to.have.status(404));"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer {{tokenTenantB}}" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments/{{paymentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments", "{{paymentId}}"]
+						},
+						"description": "Tenant B tries to view Tenant A's payment.\n\nPre-req: Submit a payment as tenant-001, then get token for tenant-002."
+					}
+				},
+				{
+					"name": "Invalid Token → 401",
+					"event": [
+						{
+							"listen": "test",
+							"script": {
+								"exec": [
+									"pm.test('Returns 401', () => pm.response.to.have.status(401));"
+								],
+								"type": "text/javascript"
+							}
+						}
+					],
+					"request": {
+						"method": "GET",
+						"header": [
+							{ "key": "Authorization", "value": "Bearer invalid.jwt.token" }
+						],
+						"url": {
+							"raw": "{{baseUrl}}/api/v1/payments/{{paymentId}}",
+							"host": ["{{baseUrl}}"],
+							"path": ["api", "v1", "payments", "{{paymentId}}"]
+						},
+						"description": "Malformed JWT token."
+					}
+				}
+			]
+		}
+	]
+}
+
