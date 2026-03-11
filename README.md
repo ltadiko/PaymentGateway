@@ -468,7 +468,7 @@ Full documentation is in the [`docs/`](docs/) directory:
 | ADR | Title | Key Decision |
 |---|---|---|
 | [ADR-001](docs/adr/ADR-001-security-design.md) | Security Architecture | JWT (HMAC-SHA512) + RBAC + AES-256-GCM encryption |
-| [ADR-002](docs/adr/ADR-002-idempotency-strategy.md) | Idempotency Strategy | DB unique constraint + tenant-scoped keys |
+| [ADR-002](docs/adr/ADR-002-idempotency-strategy.md) | Idempotency Strategy | DB unique constraint + tenant-scoped keys (Redis cache in production) |
 | [ADR-003](docs/adr/ADR-003-event-driven-design.md) | Event-Driven Design | Kafka + Transactional Outbox Pattern + DLT |
 | [ADR-004](docs/adr/ADR-004-domain-modeling-patterns.md) | Domain Modeling | Sealed types + pattern matching state machine |
 | [ADR-005](docs/adr/ADR-005-immutable-audit-trail.md) | Immutable Audit Trail | Append-only JPA entity, no UPDATE/DELETE |

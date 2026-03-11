@@ -118,3 +118,59 @@ This guarantees **exactly-once semantics** at the database level without requiri
 ### Compliance Note
 - The 24-hour retention window aligns with typical payment retry windows. For regulatory purposes, the **payment** and **audit trail** records are retained indefinitely — only the idempotency key mapping is purged.
 
+---
+
+## Production Caching Considerations
+
+### Does caching help prevent duplicate payments?
+
+**No — caching alone cannot prevent duplicates. But it improves performance.**
+
+| Layer | Role | Prevents Duplicates? |
+|---|---|---|
+| **Cache (Redis)** | Fast-path duplicate detection (~1ms) | ❌ Not authoritative — two requests can miss simultaneously |
+| **DB unique constraint** | Ultimate guard — one INSERT succeeds, the other throws | ✅ Yes — only reliable mechanism |
+| **Idempotency key lookup** | Returns stored response for known keys | ⚡ Performance optimization |
+
+### Why Caffeine (local cache) was NOT implemented
+
+Caffeine is an in-process cache. In a distributed payment gateway with multiple instances behind a load balancer:
+
+```
+Instance A: Client sends payment → Caffeine caches idempotency key ✓
+Instance B: Same client retries  → Caffeine has NO idea about it ✗ → hits DB anyway
+```
+
+Local caching only helps if the same client always hits the same instance (sticky sessions), which is not guaranteed and should not be assumed.
+
+### Recommended Production Approach: Redis
+
+For high-throughput production deployments, use **Redis** as a distributed cache with a three-tier lookup strategy:
+
+```
+1. Check Redis cache (~1ms)         ← fast-path for known duplicates
+   │
+   ├── HIT  → return stored response (no DB query)
+   │
+   └── MISS → 2. Check database (~5-10ms)  ← authoritative lookup
+                  │
+                  ├── HIT  → populate Redis, return stored response
+                  │
+                  └── MISS → 3. Create payment + idempotency key
+                                  │
+                                  └── DB unique constraint = ultimate guard
+                                      On success → write to Redis + DB
+                                      On DataIntegrityViolationException → re-query DB
+```
+
+**Redis configuration:**
+- **TTL:** Match idempotency key retention (e.g., 24 hours)
+- **Key format:** `idempotency:{tenantId}:{idempotencyKey}`
+- **Value:** Serialized response JSON
+- **Eviction:** LRU when max memory reached (safe — DB is the source of truth)
+
+This was intentionally left out of the assignment implementation because:
+1. Adding Redis increases infrastructure complexity
+2. The assignment explicitly says "use embedded databases" and avoid complex infrastructure
+3. The DB-only approach is **correct** — Redis is a performance optimization, not a correctness requirement
+
