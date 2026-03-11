@@ -61,7 +61,7 @@ app:
     api:
       base-url: http://localhost:${server.port}
   outbox:
-    poll-interval-ms: 1000
+    poll-interval-ms: 100
     cleanup-interval-ms: 3600000
     retention-days: 7
 

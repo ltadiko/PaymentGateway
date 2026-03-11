@@ -227,6 +227,40 @@ pollAndPublish():
 | `KafkaPaymentEventPublisher` | Actual Kafka send — now called by the poller, not by services |
 | `OutboxPollerService` | `@Scheduled` poller — reads outbox → publishes to Kafka → marks published |
 
+### Latency Optimization
+
+The polling interval is set to **100ms** by default (configurable via `app.outbox.poll-interval-ms`).
+This is feasible because:
+- Virtual threads (`spring.threads.virtual.enabled=true`) make frequent polling essentially free — no platform thread is wasted.
+- The query is indexed on `(published, createdAt)` for efficient lookups.
+- Empty polls return immediately with zero overhead.
+
+### Production Upgrade Path: Debezium CDC
+
+In production, the polling-based outbox relay can be replaced with **Debezium Change Data Capture (CDC)**
+for near-zero latency (~10-50ms):
+
+```
+Current (Polling):                          Production (Debezium CDC):
+┌──────────┐  poll every   ┌───────┐        ┌──────────┐  WAL stream  ┌───────────┐  auto  ┌───────┐
+│  outbox   │ ──100ms────► │ Kafka │        │  outbox   │ ──────────► │ Debezium  │ ─────► │ Kafka │
+│  table    │              │       │        │  table    │   ~10ms     │ Connector │        │       │
+└──────────┘              └───────┘        └──────────┘              └───────────┘        └───────┘
+```
+
+**Why Debezium is not used in this assignment:**
+- **H2 is not supported** — Debezium reads the database Write-Ahead Log (WAL/binlog). H2 doesn't have one. Requires PostgreSQL, MySQL, or SQL Server.
+- **Infrastructure overhead** — Debezium runs as a Kafka Connect connector, requiring a Kafka Connect cluster.
+- **Assignment constraints** — "Use embedded databases (H2)... Do not spend time with complex infrastructure setups."
+
+**Migration steps (when moving to production):**
+1. Switch from H2 to PostgreSQL (set `wal_level=logical`)
+2. Deploy Kafka Connect with the Debezium PostgreSQL connector
+3. Configure the connector to watch the `outbox_events` table
+4. Remove `OutboxPollerService` — Debezium replaces it
+5. Use Debezium's [Outbox Event Router](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html) SMT to route events to the correct Kafka topics
+6. The `OutboxPaymentEventPublisher` and `outbox_events` table remain unchanged
+
 ---
 
 ## Alternatives Considered
@@ -254,8 +288,8 @@ pollAndPublish():
 
 ### Negative
 - Kafka adds infrastructure complexity (mitigated by Testcontainers for testing, embedded broker for dev).
-- Eventually consistent: there's a brief window (poller interval, default 1s) between ingestion and processing.
-- The outbox poller adds a small latency (~1s) between event creation and Kafka publish.
+- Eventually consistent: there's a brief window (poller interval, default 100ms) between ingestion and processing.
+- The outbox poller adds a small latency (~100ms) between event creation and Kafka publish. In production, Debezium CDC reduces this to ~10-50ms.
 - Requires careful consumer idempotency — consumers must handle redelivery (at-least-once semantics).
 
 ### Monitoring Considerations (Future)

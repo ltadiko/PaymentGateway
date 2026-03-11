@@ -12,6 +12,8 @@ A production-grade backend engine for a payment gateway built with **Java 21**, 
 - [API Collections (Postman & Bruno)](#api-collections-postman--bruno)
 - [API Usage (cURL)](#api-usage-curl)
 - [H2 Database Console](#h2-database-console)
+- [Swagger UI (OpenAPI)](#swagger-ui-openapi)
+- [Transactional Outbox Pattern](#transactional-outbox-pattern)
 - [Architecture Documentation](#architecture-documentation)
 - [Architectural Decision Records](#architectural-decision-records)
 
@@ -59,18 +61,21 @@ A production-grade backend engine for a payment gateway built with **Java 21**, 
 ```
 POST /api/v1/payments (202 Accepted)
     → Idempotency check
-    → Save payment (SUBMITTED)
-    → Publish to Kafka: payment.submitted
+    → Save payment (SUBMITTED) + Write event to outbox (same transaction)
+    → OutboxPoller (every 100ms) relays to Kafka: payment.submitted
         → FraudAssessmentConsumer
             → Call fraud API (OpenAPI/HTTP)
             → FRAUD_APPROVED or FRAUD_REJECTED
-            → Publish to Kafka: payment.fraud-assessed or payment.completed
+            → Write event to outbox (same transaction as state change)
+            → OutboxPoller relays to Kafka: payment.fraud-assessed or payment.completed
                 → BankProcessingConsumer (if approved)
                     → Call bank simulator
                     → COMPLETED or FAILED
-                    → Publish to Kafka: payment.completed
+                    → Write event to outbox (same transaction as state change)
+                    → OutboxPoller relays to Kafka: payment.completed
 
 Every state transition → Immutable audit trail entry
+Event publishing → Transactional Outbox Pattern (DB + Kafka atomicity)
 Failures → 3 retries → Dead Letter Topic (<topic>.DLT)
 ```
 
@@ -388,6 +393,64 @@ Interactive API documentation available at **http://localhost:8080/swagger-ui.ht
 
 ---
 
+## Transactional Outbox Pattern
+
+All domain events (payment submitted, fraud assessed, bank processed) are written to an **`outbox_events`** table inside the **same DB transaction** as the domain state change. A scheduled poller relays them to Kafka.
+
+### Why?
+
+In a payment system, losing events is unacceptable. Without the outbox, a crash between `DB COMMIT` and `Kafka publish` would leave payments stuck forever.
+
+```
+Without Outbox (UNSAFE):                   With Outbox (SAFE):
+┌─────────────────────┐                    ┌─────────────────────────────────┐
+│ @Transactional       │                    │ @Transactional                   │
+│ 1. Save payment ✓    │                    │ 1. Save payment ✓                │
+│ 2. Save audit   ✓    │                    │ 2. Save audit   ✓                │
+│ --- COMMIT ---       │                    │ 3. Save outbox  ✓ (same TX!)     │
+│ 3. Kafka publish  💥 │ ← crash = lost!   │ --- COMMIT ---                   │
+└─────────────────────┘                    └─────────────────────────────────┘
+                                            Poller (every 100ms) → Kafka ✓
+```
+
+### Current Implementation (Polling)
+
+| Component | Role |
+|---|---|
+| `OutboxPaymentEventPublisher` | `@Primary` — writes to `outbox_events` table inside the transaction |
+| `OutboxPollerService` | `@Scheduled(100ms)` — reads unpublished rows → publishes to Kafka → marks published |
+| `KafkaPaymentEventPublisher` | Called by the poller to do the actual Kafka send |
+
+**Latency:** ~100ms (poll interval). Configurable via `app.outbox.poll-interval-ms`.
+
+### Production Upgrade: Debezium CDC
+
+For near-zero latency (~10-50ms), replace the polling outbox with **Debezium Change Data Capture**:
+
+```
+Current (Polling, ~100ms):                  Production (Debezium CDC, ~10-50ms):
+┌──────────┐  poll every   ┌───────┐        ┌──────────┐  WAL stream  ┌───────────┐  auto  ┌───────┐
+│  outbox   │ ──100ms────► │ Kafka │        │  outbox   │ ──────────► │ Debezium  │ ─────► │ Kafka │
+│  table    │              │       │        │  table    │   ~10ms     │ Connector │        │       │
+└──────────┘              └───────┘        └──────────┘              └───────────┘        └───────┘
+```
+
+**Why Debezium is not used here:**
+- **H2 not supported** — Debezium needs PostgreSQL/MySQL WAL. Assignment requires H2.
+- **Infrastructure** — Requires Kafka Connect cluster. Assignment says "no complex infra."
+
+**Migration steps to Debezium:**
+1. Switch H2 → PostgreSQL (`wal_level=logical`)
+2. Deploy Kafka Connect + Debezium PostgreSQL connector
+3. Point connector at `outbox_events` table
+4. Use [Outbox Event Router SMT](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html) for topic routing
+5. Remove `OutboxPollerService` — Debezium replaces it
+6. `OutboxPaymentEventPublisher` and `outbox_events` table remain **unchanged**
+
+> See [ADR-003](docs/adr/ADR-003-event-driven-design.md) for the full design rationale.
+
+---
+
 ## Architecture Documentation
 
 Full documentation is in the [`docs/`](docs/) directory:
@@ -406,7 +469,7 @@ Full documentation is in the [`docs/`](docs/) directory:
 |---|---|---|
 | [ADR-001](docs/adr/ADR-001-security-design.md) | Security Architecture | JWT (HMAC-SHA512) + RBAC + AES-256-GCM encryption |
 | [ADR-002](docs/adr/ADR-002-idempotency-strategy.md) | Idempotency Strategy | DB unique constraint + tenant-scoped keys |
-| [ADR-003](docs/adr/ADR-003-event-driven-design.md) | Event-Driven Design | Kafka topics per pipeline stage + DLT |
+| [ADR-003](docs/adr/ADR-003-event-driven-design.md) | Event-Driven Design | Kafka + Transactional Outbox Pattern + DLT |
 | [ADR-004](docs/adr/ADR-004-domain-modeling-patterns.md) | Domain Modeling | Sealed types + pattern matching state machine |
 | [ADR-005](docs/adr/ADR-005-immutable-audit-trail.md) | Immutable Audit Trail | Append-only JPA entity, no UPDATE/DELETE |
 | [ADR-006](docs/adr/ADR-006-testing-strategy.md) | Testing Strategy | Unit + Integration + E2E with EmbeddedKafka |
@@ -442,10 +505,10 @@ Full documentation is in the [`docs/`](docs/) directory:
 
 | Category | Count |
 |---|---|
-| Unit tests | ~162 |
+| Unit tests | ~171 |
 | Integration tests (MockMvc + JPA) | ~65 |
 | E2E tests (RestClient + Kafka) | 14 |
-| **Total** | **241** |
+| **Total** | **250** |
 | Failures | **0** |
 
 ---
