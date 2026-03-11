@@ -81,8 +81,9 @@ public class PaymentIngestionService implements SubmitPaymentUseCase {
      * <p>If the idempotency key has been used before (by the same tenant), the original
      * response is returned and no new payment is created.
      *
-     * <p>Events are published <strong>after</strong> the transaction commits to avoid
-     * the "published but not persisted" problem.
+     * <p>Events are published <strong>inside</strong> the transaction via the
+     * Transactional Outbox Pattern — the event is written to the outbox table
+     * in the same DB transaction, then relayed to Kafka by a scheduled poller.
      */
     @Override
     @Transactional
@@ -108,7 +109,7 @@ public class PaymentIngestionService implements SubmitPaymentUseCase {
         // 3. Persist payment + audit + idempotency key in single transaction
         PaymentResponse response = persistNewPayment(command, payment);
 
-        // 4. Publish event AFTER transaction commits
+        // 4. Write event to outbox (same transaction — Transactional Outbox Pattern)
         publishSubmittedEvent(payment);
 
         return response;
@@ -165,29 +166,23 @@ public class PaymentIngestionService implements SubmitPaymentUseCase {
     }
 
     /**
-     * Publishes a {@code PaymentSubmitted} event to the message broker.
+     * Writes a {@code PaymentSubmitted} event to the outbox within the current transaction.
      *
-     * <p>Failures are logged but do not cause the request to fail — the payment
-     * is already persisted and can be picked up by a retry mechanism.
+     * <p>With the Transactional Outbox Pattern, this write is part of the same
+     * {@code @Transactional} boundary as the payment persist. If the outbox write
+     * fails, the entire transaction rolls back — no "committed but not published" window.
      *
      * @param payment the submitted payment
      */
     private void publishSubmittedEvent(Payment payment) {
-        try {
-            var event = new PaymentEvent.PaymentSubmitted(
-                    UUID.randomUUID(),
-                    payment.getId(),
-                    payment.getTenantId(),
-                    Instant.now()
-            );
-            eventPublisher.publish(event);
-            log.debug("Published PaymentSubmitted event: paymentId={}", payment.getId());
-        } catch (Exception e) {
-            // Event publishing failure should not fail the request.
-            // Payment is persisted; a scheduled job or retry can re-publish.
-            log.error("Failed to publish PaymentSubmitted event: paymentId={}, error={}",
-                    payment.getId(), e.getMessage(), e);
-        }
+        var event = new PaymentEvent.PaymentSubmitted(
+                UUID.randomUUID(),
+                payment.getId(),
+                payment.getTenantId(),
+                Instant.now()
+        );
+        eventPublisher.publish(event);
+        log.debug("PaymentSubmitted event written to outbox: paymentId={}", payment.getId());
     }
 
     /**

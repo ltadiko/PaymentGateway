@@ -60,6 +60,10 @@ app:
   fraud:
     api:
       base-url: http://localhost:${server.port}
+  outbox:
+    poll-interval-ms: 1000
+    cleanup-interval-ms: 3600000
+    retention-days: 7
 
 # ── Logging ──
 logging:

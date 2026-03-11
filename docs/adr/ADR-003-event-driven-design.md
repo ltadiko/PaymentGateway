@@ -165,22 +165,88 @@ Each group can be scaled independently by adding more consumer instances (up to 
 
 ---
 
+## Transactional Outbox Pattern
+
+### Problem
+
+In the naive approach, the service commits DB changes and then publishes to Kafka **outside** the transaction. If the app crashes between the DB commit and the Kafka publish, the event is lost and the payment gets stuck forever.
+
+```
+@Transactional
+submit():
+  1. Save payment to DB         ← committed ✓
+  2. Save audit entry to DB     ← committed ✓
+  --- TRANSACTION COMMITS ---
+  3. Publish to Kafka            ← APP CRASHES HERE → event lost!
+```
+
+### Solution
+
+Events are written to an `outbox_events` table **inside** the same DB transaction. A scheduled poller reads unpublished events and relays them to Kafka.
+
+```
+@Transactional
+submit():
+  1. Save payment to DB         ← committed together
+  2. Save audit entry to DB     ← committed together
+  3. Save event to outbox_events ← committed together
+  --- TRANSACTION COMMITS ---
+
+@Scheduled (every 1s)
+pollAndPublish():
+  1. SELECT * FROM outbox_events WHERE published = false
+  2. For each event → publish to Kafka
+  3. Mark published = true
+```
+
+### Outbox Table Schema
+
+| Column | Type | Purpose |
+|---|---|---|
+| `id` | UUID | Primary key |
+| `aggregate_type` | VARCHAR(100) | Always "Payment" |
+| `aggregate_id` | UUID | The paymentId (used as Kafka key) |
+| `event_type` | VARCHAR(100) | e.g., "PaymentSubmitted" (for deserialization routing) |
+| `payload` | TEXT | JSON-serialized `PaymentEvent` |
+| `created_at` | TIMESTAMP | When the event was written |
+| `published` | BOOLEAN | Whether the poller has relayed it to Kafka |
+
+### Guarantees
+
+- **Atomicity:** If the DB transaction rolls back, the outbox entry is also rolled back → no phantom events.
+- **Durability:** If the DB transaction commits, the event is guaranteed to be in the outbox → no lost events.
+- **At-least-once delivery:** If the app crashes after Kafka publish but before marking `published=true`, the event will be re-published on the next poll. Downstream consumers are idempotent (via `eventId`).
+- **Cleanup:** Published events older than 7 days are automatically deleted by a scheduled cleanup job.
+
+### Implementation Components
+
+| Component | Role |
+|---|---|
+| `OutboxEventEntity` | JPA entity for `outbox_events` table |
+| `OutboxPaymentEventPublisher` | `@Primary` `PaymentEventPublisher` — writes to outbox instead of Kafka |
+| `KafkaPaymentEventPublisher` | Actual Kafka send — now called by the poller, not by services |
+| `OutboxPollerService` | `@Scheduled` poller — reads outbox → publishes to Kafka → marks published |
+
+---
+
 ## Alternatives Considered
 
 | Alternative | Why Rejected |
 |---|---|
 | **RabbitMQ** | Good choice, but Kafka's log retention aligns better with the audit trail requirement. Kafka also provides stronger ordering guarantees when scaling consumers. |
 | **Spring ApplicationEvents (in-process)** | No durability — if the process crashes, in-flight events are lost. A true broker provides persistence and consumer group coordination. |
-| **Outbox pattern with DB polling** | More complex to implement (requires a scheduler + polling loop). Kafka provides similar guarantees with less application code. Could be added later for exactly-once semantics if needed. |
+| **Direct Kafka publish (no outbox)** | Simpler but creates a crash window between DB commit and Kafka publish. Unacceptable for a payment system where lost events mean stuck payments. |
 | **Saga orchestrator** | Overkill for two processing steps. A simple choreography-based approach (event chain) is sufficient and simpler. |
 | **Single topic with event type routing** | Reduces topic count but complicates consumer logic and makes independent scaling impossible. One-topic-per-transition is cleaner. |
+| **Debezium CDC** | Production-grade alternative to polling — captures DB changes via WAL. Overkill for H2/assignment scope; would be the preferred choice at scale. |
 
 ---
 
 ## Consequences
 
 ### Positive
-- Clean separation: ingestion is fast (just write to DB + publish), processing is independent.
+- Clean separation: ingestion is fast (just write to DB + outbox), processing is independent.
+- **Transactional Outbox** eliminates the crash window — no more "committed but not published" events.
 - Each processing phase can be deployed, scaled, and monitored independently.
 - Kafka's log retention provides a natural audit/replay mechanism.
 - DLT ensures no message is silently lost — failed payments are always trackable.
@@ -188,7 +254,8 @@ Each group can be scaled independently by adding more consumer instances (up to 
 
 ### Negative
 - Kafka adds infrastructure complexity (mitigated by Testcontainers for testing, embedded broker for dev).
-- Eventually consistent: there's a brief window between ingestion and processing where the payment is in `SUBMITTED` state.
+- Eventually consistent: there's a brief window (poller interval, default 1s) between ingestion and processing.
+- The outbox poller adds a small latency (~1s) between event creation and Kafka publish.
 - Requires careful consumer idempotency — consumers must handle redelivery (at-least-once semantics).
 
 ### Monitoring Considerations (Future)

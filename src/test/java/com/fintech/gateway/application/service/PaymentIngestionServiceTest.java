@@ -26,6 +26,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -158,18 +159,16 @@ class PaymentIngestionServiceTest {
     }
 
     @Test
-    @DisplayName("Event publishing failure does not fail the submission")
-    void shouldNotFailWhenEventPublishingFails() {
+    @DisplayName("Outbox write failure rolls back the entire transaction (Transactional Outbox guarantee)")
+    void shouldFailWhenOutboxWriteFails() {
         SubmitPaymentCommand command = createCommand();
         when(idempotencyStore.findResponse(anyString(), anyString())).thenReturn(Optional.empty());
         when(paymentRepository.save(any(Payment.class))).thenAnswer(inv -> inv.getArgument(0));
-        doThrow(new RuntimeException("Kafka unavailable")).when(eventPublisher).publish(any());
+        doThrow(new RuntimeException("Outbox write failed")).when(eventPublisher).publish(any());
 
-        PaymentResponse response = service.submit(command);
-
-        assertThat(response.paymentId()).isNotNull();
-        assertThat(response.status()).isEqualTo("SUBMITTED");
-        verify(paymentRepository).save(any(Payment.class));
+        assertThatThrownBy(() -> service.submit(command))
+                .isInstanceOf(RuntimeException.class)
+                .hasMessage("Outbox write failed");
     }
 
     @Test

@@ -35,6 +35,10 @@ app:
   fraud:
     api:
       base-url: http://localhost:${local.server.port:8080}
+  outbox:
+    poll-interval-ms: 500
+    cleanup-interval-ms: 3600000
+    retention-days: 1
 
 logging:
   level:
